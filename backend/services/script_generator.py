@@ -2,9 +2,13 @@ import os
 import logging
 import aiohttp
 import json
+import time
+import asyncio
+from datetime import datetime
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 from .influencer_matcher import get_influencer_info
+from utils.timing import Timer  # Replace the Timer import
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -18,143 +22,63 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 
 async def generate_video_ideas(influencer_style: str, industry: str, company_data: List[str], num_ideas: int = 5) -> List[Dict[str, str]]:
-    """Generate video ideas based on influencer style and company data"""
-    logger.info(f"Generating video ideas for style: {influencer_style}")
-    
+    """Generate video ideas using AI model"""
     try:
-        if not DEEPSEEK_API_KEY:
-            logger.error("DeepSeek API key not configured")
-            # Return mock data if API key is not configured
-            return [
-                {
-                    "title": f"The {industry} Challenge",
-                    "concept": "A high-stakes competition where companies compete to solve a real-world problem in 24 hours",
-                    "appeal": "Combines entertainment with valuable industry insights"
-                },
-                {
-                    "title": f"Secret Sauce Revealed",
-                    "concept": "Behind-the-scenes look at how successful {industry} companies operate",
-                    "appeal": "Provides actionable insights while maintaining viewer interest"
-                },
-                {
-                    "title": f"Tech Transformation",
-                    "concept": "Dramatic before-and-after reveal of a company's digital transformation",
-                    "appeal": "Visual storytelling with clear value proposition"
-                }
-            ]
-        
-        company_info = "\n".join(company_data) if isinstance(company_data, list) else str(company_data)
-        
-        prompt = f"""
-        As a content creator with the style of {influencer_style}, generate {num_ideas} unique video ideas 
-        for a {industry} company with the following information:
-        
-        {company_info}
-        
-        For each idea, provide:
-        1. A catchy title
-        2. A brief description of the video concept
-        3. Why this would appeal to the target audience
-        
-        Format each idea as a JSON object with these exact keys:
-        - title: The video title
-        - concept: The video concept
-        - appeal: Why it appeals to the audience
-        
-        Return ONLY a JSON array of these objects, with no additional text or formatting.
-        """
-        
-        headers = {
-            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "model": "deepseek-chat",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            "temperature": 0.8,
-            "max_tokens": 1000
-        }
-        
-        logger.info("Calling DeepSeek API for video ideas")
-        async with aiohttp.ClientSession() as session:
-            async with session.post(DEEPSEEK_API_URL, json=payload, headers=headers) as response:
+        async with Timer("Video Ideas Generation") as timer:
+            if not DEEPSEEK_API_KEY:
+                logger.error("DeepSeek API key not configured")
+                return []
+            
+            company_info = "\n".join(company_data)
+            
+            prompt = f"""
+            Generate {num_ideas} video content ideas for a {industry} company with this style: {influencer_style}
+
+            Company Information:
+            {company_info}
+
+            Format each video idea exactly like this, with 3 asterisks and clear sections:
+            **Title:** *"Catchy Title Here"*
+            **Concept:** Brief description of the video concept
+            **Appeal:** Why this would resonate with the target audience
+
+            Separate each idea with three dashes (---).
+            Generate exactly {num_ideas} ideas.
+            """
+            
+            async with aiohttp.ClientSession() as session:
+                response = await session.post(
+                    DEEPSEEK_API_URL,
+                    headers={
+                        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "deepseek-chat",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.8,
+                        "max_tokens": 1000
+                    }
+                )
+                
                 if response.status != 200:
                     error_text = await response.text()
-                    logger.error(f"API request failed with status {response.status}: {error_text}")
-                    raise Exception(f"Failed to generate video ideas: {error_text}")
+                    logger.error(f"DeepSeek API error: {error_text}")
+                    return []
                 
                 data = await response.json()
-                logger.info("Received response from DeepSeek API")
+                logger.debug(f"Raw DeepSeek response: {data}")
                 
-                try:
-                    ideas_text = data["choices"][0]["message"]["content"].strip()
-                    # Try to find JSON array in the response
-                    start_idx = ideas_text.find("[")
-                    end_idx = ideas_text.rfind("]") + 1
-                    
-                    if start_idx == -1 or end_idx == 0:
-                        raise ValueError("Could not find JSON array in response")
-                    
-                    json_str = ideas_text[start_idx:end_idx]
-                    ideas = json.loads(json_str)
-                    
-                    if not isinstance(ideas, list):
-                        raise ValueError("Response is not a list of ideas")
-                    
-                    # Validate each idea has required fields
-                    for idea in ideas:
-                        if not all(key in idea for key in ["title", "concept", "appeal"]):
-                            raise ValueError("Ideas missing required fields")
-                    
-                    logger.info(f"Successfully generated {len(ideas)} video ideas")
-                    return ideas
-                except (json.JSONDecodeError, KeyError, ValueError) as e:
-                    logger.error(f"Error parsing API response: {str(e)}")
-                    # Return mock data on error
-                    return [
-                        {
-                            "title": f"The {industry} Challenge",
-                            "concept": "A high-stakes competition where companies compete to solve a real-world problem in 24 hours",
-                            "appeal": "Combines entertainment with valuable industry insights"
-                        },
-                        {
-                            "title": f"Secret Sauce Revealed",
-                            "concept": "Behind-the-scenes look at how successful {industry} companies operate",
-                            "appeal": "Provides actionable insights while maintaining viewer interest"
-                        },
-                        {
-                            "title": f"Tech Transformation",
-                            "concept": "Dramatic before-and-after reveal of a company's digital transformation",
-                            "appeal": "Visual storytelling with clear value proposition"
-                        }
-                    ]
-    
+                ideas = parse_deepseek_response(data)
+                logger.info(f"Generated {len(ideas)} video ideas")
+                for i, idea in enumerate(ideas, 1):
+                    logger.info(f"Idea {i}: {idea['title']}")
+                
+                return ideas
+                
     except Exception as e:
-        logger.error(f"Error in generate_video_ideas: {str(e)}")
-        # Return mock data on any error
-        return [
-            {
-                "title": f"The {industry} Challenge",
-                "concept": "A high-stakes competition where companies compete to solve a real-world problem in 24 hours",
-                "appeal": "Combines entertainment with valuable industry insights"
-            },
-            {
-                "title": f"Secret Sauce Revealed",
-                "concept": "Behind-the-scenes look at how successful {industry} companies operate",
-                "appeal": "Provides actionable insights while maintaining viewer interest"
-            },
-            {
-                "title": f"Tech Transformation",
-                "concept": "Dramatic before-and-after reveal of a company's digital transformation",
-                "appeal": "Visual storytelling with clear value proposition"
-            }
-        ]
+        logger.error(f"Error generating video ideas: {e}", exc_info=True)
+        return []
 
 async def generate_script(video_idea: Dict[str, str], influencer_style: str, company_data: List[str]) -> str:
     """Generate a video script based on the selected video idea"""
@@ -163,68 +87,268 @@ async def generate_script(video_idea: Dict[str, str], influencer_style: str, com
     try:
         if not DEEPSEEK_API_KEY:
             logger.error("DeepSeek API key not configured")
-            raise Exception("DeepSeek API key not configured")
+            raise ValueError("DeepSeek API key not configured")
+            
+        # Create a detailed prompt for script generation
+        prompt = f"""Generate a detailed video script in {influencer_style} style for this video idea:
+
+Title: {video_idea.get('title')}
+Concept: {video_idea.get('concept')}
+Appeal: {video_idea.get('appeal')}
+
+Company Information:
+{chr(10).join(company_data)}
+
+Format the script with these sections:
+**Hook:** [Attention-grabbing opening, 2-3 lines]
+**Main Points:** [3-5 key points with supporting details]
+**Call to Action:** [Clear next steps for viewers]
+**Signature Move:** [Unique stylistic element or transition]
+
+Keep the tone motivational and action-oriented."""
         
-        company_info = "\n".join(company_data)
-        
-        prompt = f"""
-        As a content creator with the style of {influencer_style}, write a detailed script for this video idea:
-        
-        Title: {video_idea.get('title')}
-        Concept: {video_idea.get('concept')}
-        Target Appeal: {video_idea.get('appeal')}
-        
-        Company Information:
-        {company_info}
-        
-        Write a complete video script that includes:
-        1. Opening hook
-        2. Introduction
-        3. Main content sections
-        4. Call to action
-        5. Closing
-        
-        Format the script with clear section headers and timing estimates.
-        Maintain the style and tone of {influencer_style} throughout.
-        Focus on engaging delivery and maintaining viewer interest.
-        Include any specific catchphrases or signature moves associated with the style.
-        """
-        
-        headers = {
-            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "model": "deepseek-chat",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            "temperature": 0.7,
-            "max_tokens": 2000
-        }
-        
-        logger.info("Calling DeepSeek API for script generation")
         async with aiohttp.ClientSession() as session:
-            async with session.post(DEEPSEEK_API_URL, json=payload, headers=headers) as response:
+            response = await session.post(
+                DEEPSEEK_API_URL,
+                headers={
+                    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "deepseek-chat",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.8,
+                    "max_tokens": 1000
+                }
+            )
+            
+            if response.status != 200:
+                error_text = await response.text()
+                logger.error(f"DeepSeek API error: {error_text}")
+                return ""
+            
+            data = await response.json()
+            script_content = data["choices"][0]["message"]["content"]
+            
+            logger.info("=== Generated Script ===")
+            logger.info(script_content)
+            logger.info("======================")
+            
+            return script_content
+            
+    except Exception as e:
+        logger.error(f"Error generating script: {e}", exc_info=True)
+        return ""
+
+async def generate_scripts_parallel(ideas: List[Dict[str, str]], influencer_style: str, company_data: List[str]) -> List[str]:
+    """Generate multiple scripts in parallel"""
+    logger.info(f"Starting parallel script generation for {len(ideas)} ideas")
+    
+    try:
+        tasks = []
+        async with aiohttp.ClientSession() as session:
+            for idea in ideas:
+                task = asyncio.create_task(
+                    generate_single_script(session, idea, influencer_style, company_data)
+                )
+                tasks.append(task)
+            
+            scripts = await asyncio.gather(*tasks)
+            logger.info(f"Successfully generated {len(scripts)} scripts in parallel")
+            return scripts
+            
+    except Exception as e:
+        logger.error(f"Error in parallel script generation: {e}", exc_info=True)
+        return []
+
+async def generate_single_script(
+    session: aiohttp.ClientSession,
+    video_idea: Dict[str, str],
+    influencer_style: str,
+    company_data: List[str]
+) -> Dict[str, str]:
+    """Generate a single script using shared session"""
+    logger.info(f"Generating script for idea: {video_idea.get('title', 'Unknown')}")
+    
+    try:
+        prompt = f"""Generate a detailed video script in {influencer_style} style for this video idea:
+
+Title: {video_idea.get('title')}
+Concept: {video_idea.get('concept')}
+Appeal: {video_idea.get('appeal')}
+
+Company Information:
+{chr(10).join(company_data)}
+
+Format the script with these sections:
+**Hook:** [Attention-grabbing opening, 2-3 lines]
+**Main Points:** [3-5 key points with supporting details]
+**Call to Action:** [Clear next steps for viewers]
+**Signature Move:** [Unique stylistic element or transition]
+
+Keep the tone motivational and action-oriented."""
+
+        async with session.post(
+            DEEPSEEK_API_URL,
+            headers={
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "deepseek-chat",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.8,
+                "max_tokens": 1000
+            }
+        ) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                logger.error(f"API error for {video_idea.get('title')}: {error_text}")
+                return {}
+            
+            data = await response.json()
+            content = data["choices"][0]["message"]["content"]
+            
+            logger.info(f"Generated script for: {video_idea.get('title')}")
+            return {
+                "content": content,
+                "title": video_idea.get('title'),
+                "concept": video_idea.get('concept')
+            }
+            
+    except Exception as e:
+        logger.error(f"Error generating script for {video_idea.get('title')}: {e}")
+        return {}
+
+async def generate_all_content(
+    influencer_style: str,
+    industry: str,
+    company_data: List[str],
+    num_ideas: int = 5
+) -> Dict[str, List]:
+    """Generate all content in a single API call"""
+    logger.info("Starting content generation")
+    
+    try:
+        async with Timer("Content Generation") as timer:
+            company_info = "\n".join(company_data)
+            
+            # Simplified prompt for better response structure
+            prompt = f"""Generate {num_ideas} video content ideas with scripts for a {industry} company.
+Style: {influencer_style}
+
+Company Information:
+{company_info}
+
+For each set, use this exact format:
+
+[SET START]
+IDEA:
+**Title:** *"Title here"*
+**Concept:** Brief concept
+**Appeal:** Target appeal
+
+SCRIPT:
+**Hook:** Opening hook
+**Main Points:**
+- Point 1
+- Point 2
+- Point 3
+**Call to Action:** CTA here
+**Signature Move:** Unique element
+[SET END]
+
+Generate exactly {num_ideas} complete sets."""
+
+            async with aiohttp.ClientSession() as session:
+                response = await session.post(
+                    DEEPSEEK_API_URL,
+                    headers={
+                        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "deepseek-chat",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.8,
+                        "max_tokens": 3000
+                    }
+                )
+
                 if response.status != 200:
                     error_text = await response.text()
-                    logger.error(f"API request failed with status {response.status}: {error_text}")
-                    raise Exception(f"Failed to generate script: {error_text}")
-                
+                    logger.error(f"API error: {error_text}")
+                    return {"ideas": [], "scripts": []}
+
                 data = await response.json()
-                logger.info("Received response from DeepSeek API")
-                script = data["choices"][0]["message"]["content"]
+                content = data["choices"][0]["message"]["content"]
                 
-                logger.info("Successfully generated script")
-                return script
-    
+                # Parse content using set markers
+                sets = content.split("[SET START]")
+                ideas = []
+                scripts = []
+
+                for set_content in sets:
+                    if not set_content.strip():
+                        continue
+
+                    # Split into idea and script sections
+                    parts = set_content.split("SCRIPT:")
+                    if len(parts) != 2:
+                        continue
+
+                    idea_text, script_text = parts
+
+                    # Parse idea
+                    idea = {}
+                    for line in idea_text.split("\n"):
+                        line = line.strip()
+                        if line.startswith("**Title:**"):
+                            idea["title"] = line.replace("**Title:**", "").replace("*", "").strip()
+                        elif line.startswith("**Concept:**"):
+                            idea["concept"] = line.replace("**Concept:**", "").strip()
+                        elif line.startswith("**Appeal:**"):
+                            idea["appeal"] = line.replace("**Appeal:**", "").strip()
+
+                    if idea and all(k in idea for k in ["title", "concept", "appeal"]):
+                        ideas.append(idea)
+                        # Parse script
+                        script = {
+                            "title": idea["title"],
+                            "content": script_text.strip().replace("[SET END]", "")
+                        }
+                        scripts.append(script)
+
+                logger.info(f"Generated {len(ideas)} content sets")
+                for i, idea in enumerate(ideas, 1):
+                    logger.info(f"Content Set {i}: {idea['title']}")
+                    logger.debug(f"Script {i}: {scripts[i-1]['content'][:100]}...")
+
+                return {"ideas": ideas, "scripts": scripts}
+
     except Exception as e:
-        logger.error(f"Error in generate_script: {str(e)}")
-        raise
+        logger.error(f"Error in generate_all_content: {str(e)}", exc_info=True)
+        return {"ideas": [], "scripts": []}
+
+def parse_idea_section(text: str) -> Dict[str, str]:
+    """Parse the idea section of the response"""
+    idea = {}
+    for line in text.split("\n"):
+        line = line.strip()
+        if line.startswith("**Title:**"):
+            idea["title"] = line.replace("**Title:**", "").replace("*", "").strip()
+        elif line.startswith("**Concept:**"):
+            idea["concept"] = line.replace("**Concept:**", "").strip()
+        elif line.startswith("**Appeal:**"):
+            idea["appeal"] = line.replace("**Appeal:**", "").strip()
+    return idea
+
+def parse_script_section(text: str, title: str) -> Dict[str, str]:
+    """Parse the script section of the response"""
+    return {
+        "title": title,
+        "content": text.strip()
+    }
 
 def _process_script_sections(text: str) -> Dict[str, str]:
     """Process raw script text into sections"""
@@ -296,4 +420,49 @@ def generate_script_prompt(influencer: str, topic: str) -> str:
         - Include dramatic reveals and twists
         """
     
-    # ... similar prompts for other influencers ... 
+    # ... similar prompts for other influencers ...
+
+def parse_deepseek_response(data: dict) -> List[Dict[str, str]]:
+    """Parse the response from DeepSeek API into structured video ideas"""
+    try:
+        content = data["choices"][0]["message"]["content"]
+        logger.info(f"Raw DeepSeek response:\n{content}")
+        
+        ideas = []
+        current_idea = {}
+        
+        # Split by triple dashes (---)
+        sections = content.split('---')
+        
+        for section in sections:
+            if not section.strip():
+                continue
+                
+            idea = {}
+            lines = section.strip().split('\n')
+            
+            for line in lines:
+                line = line.strip()
+                if line.startswith('**Title:**'):
+                    idea['title'] = line.replace('**Title:**', '').replace('*', '').strip()
+                elif line.startswith('**Concept:**'):
+                    idea['concept'] = line.replace('**Concept:**', '').strip()
+                elif line.startswith('**Appeal:**'):
+                    idea['appeal'] = line.replace('**Appeal:**', '').strip()
+            
+            if len(idea) == 3:  # Only add if we have all components
+                ideas.append(idea)
+        
+        logger.info("=== Parsed Video Ideas ===")
+        for i, idea in enumerate(ideas, 1):
+            logger.info(f"Idea {i}:")
+            logger.info(f"  Title: {idea['title']}")
+            logger.info(f"  Concept: {idea['concept']}")
+            logger.info(f"  Appeal: {idea['appeal']}")
+        logger.info("========================")
+        
+        return ideas
+        
+    except Exception as e:
+        logger.error(f"Error parsing DeepSeek response: {str(e)}")
+        return []

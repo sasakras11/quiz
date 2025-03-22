@@ -54,31 +54,41 @@ def normalize_url(url: str) -> str:
 
 async def scrape_company_data(company_name: str, website_url: str) -> List[str]:
     """Scrape company data from website and generate summary"""
-    logger.info(f"Scraping data for {company_name} from {website_url}")
+    logger.info(f"Starting scrape for company: {company_name}, URL: {website_url}")
     
     try:
+        # Check DeepSeek API key
         if not DEEPSEEK_API_KEY:
-            logger.error("DeepSeek API key not configured")
-            raise Exception("DeepSeek API key not configured")
-        
+            logger.error("DeepSeek API key missing")
+            raise ValueError("DeepSeek API key not configured")
+            
         # Normalize URL
-        if not website_url.startswith(('http://', 'https://')):
-            website_url = 'https://' + website_url
+        normalized_url = normalize_url(website_url)
+        logger.info(f"Normalized URL: {normalized_url}")
         
-        # Fetch website content
         async with aiohttp.ClientSession() as session:
             try:
-                logger.info(f"Fetching website content from {website_url}")
-                async with session.get(website_url, timeout=10) as response:
+                # Add headers to mimic browser
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                }
+                
+                logger.info(f"Attempting to fetch website content...")
+                async with session.get(normalized_url, timeout=10, headers=headers) as response:
+                    logger.info(f"Response status: {response.status}")
+                    
                     if response.status != 200:
-                        logger.error(f"Failed to fetch website: {response.status}")
+                        logger.error(f"Failed to fetch website. Status: {response.status}")
                         return [
                             f"{company_name} is a technology company",
-                            "Website data could not be fetched",
+                            "Website could not be accessed",
                             "Using basic company information"
                         ]
                     
                     html = await response.text()
+                    logger.info(f"Retrieved HTML content length: {len(html)}")
+                    
                     soup = BeautifulSoup(html, 'html.parser')
                     
                     # Extract text content
@@ -149,13 +159,15 @@ async def scrape_company_data(company_name: str, website_url: str) -> List[str]:
                         summary = data["choices"][0]["message"]["content"]
                         
                         # Split into list and clean up
-                        summary_points = [
-                            point.strip().strip('1234567890.-)') 
-                            for point in summary.split('\n') 
-                            if point.strip()
-                        ]
+                        summary_points = [point.strip() for point in summary.split('\n') if point.strip()]
+                        logger.debug(f"Raw summary points before cleaning: {summary_points}")
                         
                         logger.info(f"Generated {len(summary_points)} summary points")
+                        logger.info("=== Company Analysis Results ===")
+                        for i, point in enumerate(summary_points, 1):
+                            logger.info(f"{i}. {point}")
+                        logger.info("============================")
+                        
                         return summary_points if summary_points else [
                             f"{company_name} is a technology company",
                             "Detailed information not available",
@@ -219,4 +231,4 @@ def _get_mock_company_data(company_name: str) -> List[str]:
         f"{company_name} was founded in 2018 and has grown to serve over 500 clients globally",
         f"Their latest product update includes advanced analytics and reporting capabilities",
         f"The company has a strong focus on security and compliance, with SOC 2 and GDPR certifications"
-    ] 
+    ]

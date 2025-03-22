@@ -6,10 +6,36 @@ import os
 import asyncio
 from dotenv import load_dotenv
 from services.scraper import scrape_company_data, normalize_url
-from services.script_generator import generate_video_ideas, generate_script
+from services.script_generator import (
+    generate_video_ideas, 
+    generate_script,
+    generate_scripts_parallel,
+    generate_all_content  # Add this import
+)
 from services.influencer_matcher import match_influencer
 from database import init_db
 import logging
+import time
+from contextlib import asynccontextmanager
+from utils.timing import Timer
+
+# Configure logging with more detail
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Add this after the logging configuration
+@asynccontextmanager
+async def time_endpoint(name: str):
+    """Async context manager for timing endpoint execution"""
+    start = time.time()
+    try:
+        yield
+    finally:
+        duration = time.time() - start
+        logger.info(f"⏱️ {name} took {duration:.2f} seconds")
 
 # Load environment variables
 load_dotenv()
@@ -159,71 +185,63 @@ async def get_quiz_questions():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# Replace the old time_endpoint with Timer usage
 @app.post("/api/submit-quiz")
-async def submit_quiz(quiz_result: QuizResult):
+async def submit_quiz(quiz_data: dict):
     try:
-        # Validate that we have all required answers
-        if len(quiz_result.answers) < 5:
-            raise HTTPException(status_code=400, detail="Please answer all questions")
-
-        # Get industry from first quiz answer
-        industry = "Tech"  # Default
-        for answer in quiz_result.answers:
-            if answer.question_id == 1:  # First question is industry
-                industry_options = {
-                    "A": "Tech", 
-                    "B": "SaaS", 
-                    "C": "E-commerce", 
-                    "D": "Finance", 
-                    "E": "Healthcare", 
-                    "F": "Education", 
-                    "G": "Other"
-                }
-                industry = industry_options.get(answer.answer, "Tech")
-                break
-
-        # Match influencer based on quiz answers
-        influencer, influencer_info = match_influencer(quiz_result.answers)
-
-        # Check if we have pre-fetched company data
-        normalized_url = normalize_url(quiz_result.user_info.website_url)
-        cache_key = f"{quiz_result.user_info.company_name}:{normalized_url}"
+        # Validate required fields
+        if not quiz_data.get("user_info"):
+            raise ValueError("Missing user_info in request")
+            
+        user_info = quiz_data["user_info"]
+        required_fields = ["company_name", "website_url"]
+        missing_fields = [field for field in required_fields if not user_info.get(field)]
         
-        if cache_key in company_data_cache:
-            # Get pre-fetched data
-            company_summary = await company_data_cache[cache_key]
-            # Clean up cache
-            del company_data_cache[cache_key]
-        else:
-            # Fetch data if not pre-fetched
-            company_summary = await scrape_company_data(
-                quiz_result.user_info.company_name,
-                normalized_url
+        if missing_fields:
+            raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
+        
+        start_time = time.time()
+        
+        # Step 1: Get company data
+        async with Timer("Company data scraping") as scraping_timer:
+            company_data = await scrape_company_data(
+                quiz_data["user_info"]["company_name"],
+                quiz_data["user_info"]["website_url"]
             )
-
-        # Generate video ideas
-        video_ideas = await generate_video_ideas(influencer_info["style"], industry, company_summary)
-
-        # Generate scripts concurrently
-        script_tasks = [
-            generate_script(idea, influencer_info["style"], company_summary)
-            for idea in video_ideas[:3]  # Only generate scripts for top 3 ideas
-        ]
-        scripts = await asyncio.gather(*script_tasks)
-
+        
+        # Step 2: Generate all content in parallel
+        async with Timer("Content generation") as generation_timer:
+            influencer_style = "Motivational, no-nonsense, action-oriented"
+            
+            # Create one API call that generates both ideas and scripts
+            content = await generate_all_content(
+                influencer_style=influencer_style,
+                industry="Technology",
+                company_data=company_data,
+                num_ideas=5
+            )
+        
+        total_time = time.time() - start_time
+        logger.info(f"✅ Total processing time: {total_time:.2f} seconds")
+        
         return {
-            "influencer": influencer,
-            "influencer_style": influencer_info["style"],
-            "company_summary": company_summary,
-            "ideas": video_ideas,
-            "scripts": scripts
+            "success": True,
+            "influencer": "Gary",  # Change from "Gary Vee" to "Gary" to match frontend
+            "influencer_style": influencer_style,
+            "company_summary": company_data,
+            "ideas": content["ideas"],
+            "scripts": content["scripts"],
+            "timing": {
+                "scraping": round(scraping_timer.duration, 2),
+                "content_generation": round(generation_timer.duration, 2),
+                "total": round(total_time, 2)
+            }
         }
-    except HTTPException as he:
-        raise he
+        
     except Exception as e:
-        logger.error(f"Error in submit_quiz: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"❌ Error in submit_quiz: {str(e)}", exc_info=True)
+        return {"success": False, "error": str(e)}
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8002) 
+    uvicorn.run(app, host="0.0.0.0", port=8002)

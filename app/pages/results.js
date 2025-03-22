@@ -16,10 +16,10 @@ const influencerInfo = {
     description: "The showman—big, bold, action-first. Famous for challenge-based content with dramatic reveals.",
     style: "High-energy, challenge-based, dramatic"
   },
-  "GaryVee": {
+  "Gary": {  // Note: frontend expects "Gary", not "Gary Vee"
     name: "Gary Vaynerchuk",
-    image: "/images/gary.jpg",
-    description: "The motivator—raw, loud, unfiltered. Known for passionate, motivational content.",
+    image: "/images/gary.jpeg",
+    description: "The hustler—direct, motivational, no-nonsense...",
     style: "Motivational, raw, unfiltered"
   },
   "Casey": {
@@ -51,17 +51,33 @@ export default function Results() {
   useEffect(() => {
     // Get results from local storage
     const storedResults = localStorage.getItem('quizResults');
+    console.log('Stored results:', storedResults); // Debug log
+    
     if (!storedResults) {
+      console.log('No results found in localStorage'); // Debug log
       router.push('/');
       return;
     }
     
-    const parsedResults = JSON.parse(storedResults);
-    setResults(parsedResults);
-    setIsLoading(false);
-    
-    // Set share URL
-    setShareUrl(window.location.href);
+    try {
+      const parsedResults = JSON.parse(storedResults);
+      console.log('Parsed results:', parsedResults); // Debug log
+      console.log('Available influencers:', Object.keys(influencerInfo)); // Debug log
+      
+      if (!parsedResults || !parsedResults.influencer || !influencerInfo[parsedResults.influencer]) {
+        console.error('Invalid results structure:', parsedResults); // Debug log
+        throw new Error('Invalid results format');
+      }
+      
+      setResults(parsedResults);
+      setIsLoading(false);
+      
+      // Set share URL
+      setShareUrl(window.location.href);
+    } catch (error) {
+      console.error('Error processing results:', error); // Debug log
+      router.push('/');
+    }
   }, [router]);
 
   const handleShare = (platform) => {
@@ -216,4 +232,4 @@ export default function Results() {
       </footer>
     </div>
   );
-} 
+}

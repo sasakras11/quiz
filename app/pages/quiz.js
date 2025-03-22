@@ -98,52 +98,47 @@ export default function Quiz() {
   };
 
   const handleSubmit = async () => {
-    setSubmitting(true);
-    
     try {
-      // Prepare the answers in the format the API expects
-      const finalAnswers = {
-        ...answers,
-        [questions[currentQuestionIndex].id]: selectedOption
+      setSubmitting(true);
+      setLoadingStatus('Submitting answers...');
+      
+      // Transform userInfo to match backend expectations
+      const formattedUserInfo = {
+        company_name: userInfo.companyName,
+        website_url: userInfo.websiteUrl,
+        name: userInfo.name,
+        role: userInfo.role || null
       };
       
-      const quizAnswers = Object.keys(finalAnswers).map(questionId => ({
-        question_id: parseInt(questionId),
-        answer: finalAnswers[questionId]
-      }));
-      
-      // Prepare the payload
-      const payload = {
-        user_info: {
-          name: userInfo.name,
-          company_name: userInfo.companyName,
-          website_url: userInfo.websiteUrl,
-          role: userInfo.role || null
-        },
-        answers: quizAnswers
-      };
-      
-      // Send the answers to the API
       const response = await fetch(`${API_URL}/api/submit-quiz`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          user_info: formattedUserInfo,
+          answers: Object.entries(answers).map(([id, answer]) => ({
+            question_id: parseInt(id),
+            answer
+          }))
+        })
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to submit quiz');
+      const data = await response.json();
+      console.log('Quiz submission response:', data);
+
+      if (!data.success) {
+        throw new Error(data.error || 'Submission failed');
       }
 
-      const results = await response.json();
-      
-      // Store results and redirect to results page
-      localStorage.setItem('quizResults', JSON.stringify(results));
+      // Store results in localStorage
+      localStorage.setItem('quizResults', JSON.stringify(data));
+      console.log('Stored quiz results:', data);
+
+      // Navigate to results page
       router.push('/results');
-      
     } catch (error) {
-      console.error('Error submitting quiz:', error);
+      console.error('Submission error:', error);
       setError(error.message);
     } finally {
       setSubmitting(false);
@@ -267,4 +262,4 @@ export default function Quiz() {
       </main>
     </div>
   );
-} 
+}
