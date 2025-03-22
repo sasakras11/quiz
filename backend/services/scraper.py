@@ -1,92 +1,192 @@
 import os
-import requests
+import logging
+import aiohttp
+import asyncio
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
+from urllib.parse import urlparse, urljoin
+import re
+from bs4 import BeautifulSoup
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
 
 # Configure DeepSeek API
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "sk-49dfb59037de4294a0fc5291cc01768e")
-DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 
-def scrape_company_data(company_name: str, website_url: str) -> List[str]:
-    """
-    Use DeepSeek to analyze company data based on company name and website.
+def normalize_url(url: str) -> str:
+    """Normalize URL by adding scheme if missing"""
+    if not url:
+        return ""
     
-    Args:
-        company_name: The name of the company
-        website_url: The URL of the company's website
-        
-    Returns:
-        List of bullet points with company information
-    """
+    # Remove any whitespace
+    url = url.strip()
+    
+    # Add scheme if missing
+    if not url.startswith(('http://', 'https://')):
+        url = f'https://{url}'
+    
     try:
-        # Create prompt for DeepSeek
-        prompt = f"""
-        I need information about the company "{company_name}" (website: {website_url}).
+        # Parse and reconstruct to handle any other issues
+        parsed = urlparse(url)
+        # Remove any path if it's just '/'
+        path = parsed.path if parsed.path != '/' else ''
+        # Reconstruct the URL
+        normalized = f"{parsed.scheme}://{parsed.netloc}{path}"
+        if parsed.query:
+            normalized += f"?{parsed.query}"
+        if parsed.fragment:
+            normalized += f"#{parsed.fragment}"
         
-        Please analyze this company and generate 5-7 bullet points with the following information:
-        1. Key products or services
-        2. Recent updates or news
-        3. Target market and customers
-        4. Unique value propositions
-        5. Any pain points their solutions address
-        6. Company achievements or case studies
-        7. Industry positioning
+        # Final validation
+        if not parsed.netloc:
+            raise ValueError(f"Invalid URL: {url}")
         
-        These bullet points will be used to create viral tech videos, so focus on aspects that would be interesting to highlight.
-        Format each bullet point as a complete sentence that starts with "{company_name}" or "The company".
-        """
+        return normalized
+    except Exception as e:
+        logger.error(f"Error normalizing URL {url}: {str(e)}")
+        return f"https://{url}"  # Return best effort URL instead of raising error
+
+async def scrape_company_data(company_name: str, website_url: str) -> List[str]:
+    """Scrape company data from website and generate summary"""
+    logger.info(f"Scraping data for {company_name} from {website_url}")
+    
+    try:
+        if not DEEPSEEK_API_KEY:
+            logger.error("DeepSeek API key not configured")
+            raise Exception("DeepSeek API key not configured")
         
-        # Call DeepSeek API
-        headers = {
-            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-            "Content-Type": "application/json"
-        }
+        # Normalize URL
+        if not website_url.startswith(('http://', 'https://')):
+            website_url = 'https://' + website_url
         
-        payload = {
-            "model": "deepseek-chat",  # Use appropriate DeepSeek model
-            "messages": [
-                {"role": "system", "content": "You are a business analyst who researches companies and provides concise, accurate summaries."},
-                {"role": "user", "content": prompt}
-            ],
-            "max_tokens": 500,
-            "temperature": 0.3
-        }
-        
-        response = requests.post(
-            DEEPSEEK_API_URL,
-            headers=headers,
-            json=payload
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            text = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        # Fetch website content
+        async with aiohttp.ClientSession() as session:
+            try:
+                logger.info(f"Fetching website content from {website_url}")
+                async with session.get(website_url, timeout=10) as response:
+                    if response.status != 200:
+                        logger.error(f"Failed to fetch website: {response.status}")
+                        return [
+                            f"{company_name} is a technology company",
+                            "Website data could not be fetched",
+                            "Using basic company information"
+                        ]
+                    
+                    html = await response.text()
+                    soup = BeautifulSoup(html, 'html.parser')
+                    
+                    # Extract text content
+                    text_content = []
+                    for tag in soup.find_all(['p', 'h1', 'h2', 'h3', 'li']):
+                        if tag.string:
+                            text_content.append(tag.string.strip())
+                    
+                    # Clean and join text
+                    text = ' '.join(text_content)
+                    text = ' '.join(text.split())  # Remove extra whitespace
+                    
+                    if not text:
+                        logger.warning("No text content found on website")
+                        return [
+                            f"{company_name} is a technology company",
+                            "Website content could not be parsed",
+                            "Using basic company information"
+                        ]
+                    
+                    logger.info(f"Successfully extracted {len(text)} characters of content")
+                    
+                    # Generate summary using DeepSeek API
+                    prompt = f"""
+                    Analyze this company information and create 5 key points about {company_name}:
+                    
+                    {text[:2000]}  # Limit text length
+                    
+                    Format the response as a list of 5 clear, concise statements about the company.
+                    Each statement should be on a new line and focus on different aspects:
+                    1. Core business/mission
+                    2. Products/services
+                    3. Target market/customers
+                    4. Unique value proposition
+                    5. Company culture/approach
+                    """
+                    
+                    headers = {
+                        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                        "Content-Type": "application/json"
+                    }
+                    
+                    payload = {
+                        "model": "deepseek-chat",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": prompt
+                            }
+                        ],
+                        "temperature": 0.7,
+                        "max_tokens": 500
+                    }
+                    
+                    logger.info("Calling DeepSeek API for company analysis")
+                    async with session.post(DEEPSEEK_API_URL, json=payload, headers=headers) as api_response:
+                        if api_response.status != 200:
+                            error_text = await api_response.text()
+                            logger.error(f"API request failed with status {api_response.status}: {error_text}")
+                            return [
+                                f"{company_name} is a technology company",
+                                "Could not generate detailed summary",
+                                "Using basic company information"
+                            ]
+                        
+                        data = await api_response.json()
+                        logger.info("Received response from DeepSeek API")
+                        summary = data["choices"][0]["message"]["content"]
+                        
+                        # Split into list and clean up
+                        summary_points = [
+                            point.strip().strip('1234567890.-)') 
+                            for point in summary.split('\n') 
+                            if point.strip()
+                        ]
+                        
+                        logger.info(f"Generated {len(summary_points)} summary points")
+                        return summary_points if summary_points else [
+                            f"{company_name} is a technology company",
+                            "Detailed information not available",
+                            "Using basic company information"
+                        ]
             
-            # Process the response into bullet points
-            bullet_points = _process_deepseek_response(text)
-            return bullet_points
-        else:
-            print(f"DeepSeek API error: {response.text}")
-            return _get_mock_company_data(company_name)
+            except asyncio.TimeoutError:
+                logger.error("Timeout while fetching website")
+                return [
+                    f"{company_name} is a technology company",
+                    "Website took too long to respond",
+                    "Using basic company information"
+                ]
+            except Exception as e:
+                logger.error(f"Error fetching website: {str(e)}")
+                return [
+                    f"{company_name} is a technology company",
+                    f"Error: {str(e)}",
+                    "Using basic company information"
+                ]
     
     except Exception as e:
-        print(f"Error scraping company data: {str(e)}")
-        return _get_mock_company_data(company_name)
+        logger.error(f"Error in scrape_company_data: {str(e)}")
+        raise
 
 def _process_deepseek_response(text: str) -> List[str]:
-    """
-    Process the raw response from DeepSeek into bullet points.
+    """Process the raw response from DeepSeek into bullet points"""
+    if not text:
+        return []
     
-    Args:
-        text: The raw text response
-        
-    Returns:
-        List of bullet points
-    """
-    # Simple processing: split by new lines and filter for bullet points
+    # Split by new lines and filter for bullet points
     lines = text.split("\n")
     bullet_points = []
     
@@ -103,7 +203,6 @@ def _process_deepseek_response(text: str) -> List[str]:
     
     # If no bullet points were found, split the text into sentences
     if not bullet_points:
-        import re
         sentences = re.split(r'(?<=[.!?])\s+', text)
         bullet_points = [s.strip() for s in sentences if len(s.strip()) > 20]
     
@@ -111,15 +210,7 @@ def _process_deepseek_response(text: str) -> List[str]:
     return bullet_points[:7]
 
 def _get_mock_company_data(company_name: str) -> List[str]:
-    """
-    Generate mock company data for demonstration purposes.
-    
-    Args:
-        company_name: The name of the company
-        
-    Returns:
-        List of bullet points with mock company information
-    """
+    """Generate mock company data for demonstration purposes"""
     return [
         f"{company_name} recently launched a new AI-powered feature that increases productivity by 30%",
         f"The company focuses on solving pain points in the enterprise software market with innovative technology",

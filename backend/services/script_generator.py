@@ -1,50 +1,69 @@
 import os
-import requests
-from typing import Dict, List, Any
+import logging
+import aiohttp
+import json
+from typing import List, Dict, Any
 from dotenv import load_dotenv
-from backend.services.influencer_matcher import get_influencer_info
+from .influencer_matcher import get_influencer_info
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
 
 # Configure DeepSeek API
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "sk-49dfb59037de4294a0fc5291cc01768e")
-DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 
-def generate_video_ideas(influencer: str, industry: str, company_data: List[str]) -> List[Dict[str, str]]:
-    """
-    Generate video ideas based on the matched influencer, industry, and company data.
+async def generate_video_ideas(influencer_style: str, industry: str, company_data: List[str], num_ideas: int = 5) -> List[Dict[str, str]]:
+    """Generate video ideas based on influencer style and company data"""
+    logger.info(f"Generating video ideas for style: {influencer_style}")
     
-    Args:
-        influencer: The matched influencer name
-        industry: The user's industry
-        company_data: List of bullet points with company information
-        
-    Returns:
-        List of dictionaries with video ideas (title and description)
-    """
     try:
-        # Get influencer style information
-        influencer_info = get_influencer_info(influencer)
+        if not DEEPSEEK_API_KEY:
+            logger.error("DeepSeek API key not configured")
+            # Return mock data if API key is not configured
+            return [
+                {
+                    "title": f"The {industry} Challenge",
+                    "concept": "A high-stakes competition where companies compete to solve a real-world problem in 24 hours",
+                    "appeal": "Combines entertainment with valuable industry insights"
+                },
+                {
+                    "title": f"Secret Sauce Revealed",
+                    "concept": "Behind-the-scenes look at how successful {industry} companies operate",
+                    "appeal": "Provides actionable insights while maintaining viewer interest"
+                },
+                {
+                    "title": f"Tech Transformation",
+                    "concept": "Dramatic before-and-after reveal of a company's digital transformation",
+                    "appeal": "Visual storytelling with clear value proposition"
+                }
+            ]
         
-        # Prepare company data as text
-        company_data_text = "\n".join([f"- {item}" for item in company_data])
+        company_info = "\n".join(company_data) if isinstance(company_data, list) else str(company_data)
         
-        # Create prompt for DeepSeek
         prompt = f"""
-        Generate 3 viral video ideas for a {industry} company that align with {influencer}'s content style ({influencer_info['style']}).
+        As a content creator with the style of {influencer_style}, generate {num_ideas} unique video ideas 
+        for a {industry} company with the following information:
         
-        About the company:
-        {company_data_text}
+        {company_info}
         
         For each idea, provide:
-        1. A catchy, clickable title (under 60 characters)
-        2. A brief description (1-2 sentences) explaining the concept
+        1. A catchy title
+        2. A brief description of the video concept
+        3. Why this would appeal to the target audience
         
-        The ideas should be original, engaging, and have viral potential while showcasing the company's strengths.
+        Format each idea as a JSON object with these exact keys:
+        - title: The video title
+        - concept: The video concept
+        - appeal: Why it appeals to the audience
+        
+        Return ONLY a JSON array of these objects, with no additional text or formatting.
         """
         
-        # Call DeepSeek API
         headers = {
             "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
             "Content-Type": "application/json"
@@ -53,72 +72,124 @@ def generate_video_ideas(influencer: str, industry: str, company_data: List[str]
         payload = {
             "model": "deepseek-chat",
             "messages": [
-                {"role": "system", "content": "You are a creative social media strategist specializing in viral tech content."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "user",
+                    "content": prompt
+                }
             ],
-            "max_tokens": 500,
-            "temperature": 0.7
+            "temperature": 0.8,
+            "max_tokens": 1000
         }
         
-        response = requests.post(
-            DEEPSEEK_API_URL,
-            headers=headers,
-            json=payload
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            text = result.get("choices", [{}])[0].get("message", {}).get("content", "")
-            
-            # Process the response
-            ideas = _parse_ideas_from_response(text)
-            return ideas
-        else:
-            print(f"DeepSeek API error: {response.text}")
-            return _get_mock_video_ideas(influencer)
+        logger.info("Calling DeepSeek API for video ideas")
+        async with aiohttp.ClientSession() as session:
+            async with session.post(DEEPSEEK_API_URL, json=payload, headers=headers) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    logger.error(f"API request failed with status {response.status}: {error_text}")
+                    raise Exception(f"Failed to generate video ideas: {error_text}")
+                
+                data = await response.json()
+                logger.info("Received response from DeepSeek API")
+                
+                try:
+                    ideas_text = data["choices"][0]["message"]["content"].strip()
+                    # Try to find JSON array in the response
+                    start_idx = ideas_text.find("[")
+                    end_idx = ideas_text.rfind("]") + 1
+                    
+                    if start_idx == -1 or end_idx == 0:
+                        raise ValueError("Could not find JSON array in response")
+                    
+                    json_str = ideas_text[start_idx:end_idx]
+                    ideas = json.loads(json_str)
+                    
+                    if not isinstance(ideas, list):
+                        raise ValueError("Response is not a list of ideas")
+                    
+                    # Validate each idea has required fields
+                    for idea in ideas:
+                        if not all(key in idea for key in ["title", "concept", "appeal"]):
+                            raise ValueError("Ideas missing required fields")
+                    
+                    logger.info(f"Successfully generated {len(ideas)} video ideas")
+                    return ideas
+                except (json.JSONDecodeError, KeyError, ValueError) as e:
+                    logger.error(f"Error parsing API response: {str(e)}")
+                    # Return mock data on error
+                    return [
+                        {
+                            "title": f"The {industry} Challenge",
+                            "concept": "A high-stakes competition where companies compete to solve a real-world problem in 24 hours",
+                            "appeal": "Combines entertainment with valuable industry insights"
+                        },
+                        {
+                            "title": f"Secret Sauce Revealed",
+                            "concept": "Behind-the-scenes look at how successful {industry} companies operate",
+                            "appeal": "Provides actionable insights while maintaining viewer interest"
+                        },
+                        {
+                            "title": f"Tech Transformation",
+                            "concept": "Dramatic before-and-after reveal of a company's digital transformation",
+                            "appeal": "Visual storytelling with clear value proposition"
+                        }
+                    ]
     
     except Exception as e:
-        print(f"Error generating video ideas: {str(e)}")
-        return _get_mock_video_ideas(influencer)
+        logger.error(f"Error in generate_video_ideas: {str(e)}")
+        # Return mock data on any error
+        return [
+            {
+                "title": f"The {industry} Challenge",
+                "concept": "A high-stakes competition where companies compete to solve a real-world problem in 24 hours",
+                "appeal": "Combines entertainment with valuable industry insights"
+            },
+            {
+                "title": f"Secret Sauce Revealed",
+                "concept": "Behind-the-scenes look at how successful {industry} companies operate",
+                "appeal": "Provides actionable insights while maintaining viewer interest"
+            },
+            {
+                "title": f"Tech Transformation",
+                "concept": "Dramatic before-and-after reveal of a company's digital transformation",
+                "appeal": "Visual storytelling with clear value proposition"
+            }
+        ]
 
-def generate_script(idea: Dict[str, str], influencer: str, company_data: List[str]) -> Dict[str, str]:
-    """
-    Generate a video script based on a video idea, the matched influencer, and company data.
+async def generate_script(video_idea: Dict[str, str], influencer_style: str, company_data: List[str]) -> str:
+    """Generate a video script based on the selected video idea"""
+    logger.info(f"Generating script for video: {video_idea.get('title', 'Unknown')}")
     
-    Args:
-        idea: Dictionary with video idea (title and description)
-        influencer: The matched influencer name
-        company_data: List of bullet points with company information
-        
-    Returns:
-        Dictionary with script content and notes
-    """
     try:
-        # Get influencer style information
-        influencer_info = get_influencer_info(influencer)
+        if not DEEPSEEK_API_KEY:
+            logger.error("DeepSeek API key not configured")
+            raise Exception("DeepSeek API key not configured")
         
-        # Prepare company data as text
-        company_data_text = "\n".join([f"- {item}" for item in company_data])
+        company_info = "\n".join(company_data)
         
-        # Create prompt for DeepSeek
         prompt = f"""
-        Write a 150-200 word script for a viral tech video with the title "{idea['title']}" in the style of {influencer} ({influencer_info['style']}).
+        As a content creator with the style of {influencer_style}, write a detailed script for this video idea:
         
-        About the company:
-        {company_data_text}
+        Title: {video_idea.get('title')}
+        Concept: {video_idea.get('concept')}
+        Target Appeal: {video_idea.get('appeal')}
         
-        Video concept:
-        {idea['description']}
+        Company Information:
+        {company_info}
         
-        Include:
-        1. The actual script that would be spoken on camera (150-200 words)
-        2. Delivery notes (how to present, tone, energy level)
-        3. Editing notes (pacing, visual elements, b-roll suggestions)
+        Write a complete video script that includes:
+        1. Opening hook
+        2. Introduction
+        3. Main content sections
+        4. Call to action
+        5. Closing
         
-        The script should capture {influencer}'s unique style and voice while being engaging and shareable.
+        Format the script with clear section headers and timing estimates.
+        Maintain the style and tone of {influencer_style} throughout.
+        Focus on engaging delivery and maintaining viewer interest.
+        Include any specific catchphrases or signature moves associated with the style.
         """
         
-        # Call DeepSeek API
         headers = {
             "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
             "Content-Type": "application/json"
@@ -127,260 +198,77 @@ def generate_script(idea: Dict[str, str], influencer: str, company_data: List[st
         payload = {
             "model": "deepseek-chat",
             "messages": [
-                {"role": "system", "content": f"You are {influencer}, a tech content creator with a {influencer_info['style']} style."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "user",
+                    "content": prompt
+                }
             ],
-            "max_tokens": 700,
-            "temperature": 0.7
+            "temperature": 0.7,
+            "max_tokens": 2000
         }
         
-        response = requests.post(
-            DEEPSEEK_API_URL,
-            headers=headers,
-            json=payload
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            text = result.get("choices", [{}])[0].get("message", {}).get("content", "")
-            
-            # Process the response
-            script = _parse_script_from_response(text)
-            return script
-        else:
-            print(f"DeepSeek API error: {response.text}")
-            return _get_mock_script(idea, influencer)
+        logger.info("Calling DeepSeek API for script generation")
+        async with aiohttp.ClientSession() as session:
+            async with session.post(DEEPSEEK_API_URL, json=payload, headers=headers) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    logger.error(f"API request failed with status {response.status}: {error_text}")
+                    raise Exception(f"Failed to generate script: {error_text}")
+                
+                data = await response.json()
+                logger.info("Received response from DeepSeek API")
+                script = data["choices"][0]["message"]["content"]
+                
+                logger.info("Successfully generated script")
+                return script
     
     except Exception as e:
-        print(f"Error generating script: {str(e)}")
-        return _get_mock_script(idea, influencer)
+        logger.error(f"Error in generate_script: {str(e)}")
+        raise
 
-def _parse_ideas_from_response(text: str) -> List[Dict[str, str]]:
-    """
-    Parse the raw response from DeepSeek into structured video ideas.
-    
-    Args:
-        text: The raw text response
-        
-    Returns:
-        List of dictionaries with video ideas
-    """
-    ideas = []
-    lines = text.split("\n")
-    
-    current_title = None
-    current_description = []
-    
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-            
-        # Check if this is a new idea (usually starts with a number or has "Title:" in it)
-        if line[0].isdigit() and line[1] in ['.', ')'] or "Title:" in line or "TITLE:" in line:
-            # Save previous idea if exists
-            if current_title:
-                ideas.append({
-                    "title": current_title,
-                    "description": " ".join(current_description)
-                })
-                current_description = []
-                
-            # Extract new title
-            if ":" in line:
-                current_title = line.split(":", 1)[1].strip()
-            else:
-                # Remove any leading number and punctuation
-                import re
-                current_title = re.sub(r'^\d+[\.\)]\s*', '', line).strip()
-                
-        # Check if this is a description
-        elif current_title and ("Description:" in line or "DESCRIPTION:" in line):
-            desc_part = line.split(":", 1)[1].strip()
-            current_description.append(desc_part)
-        # If we have a title but not explicitly a description, consider it part of description
-        elif current_title and len(ideas) < 3:
-            current_description.append(line)
-    
-    # Add the last idea
-    if current_title and len(ideas) < 3:
-        ideas.append({
-            "title": current_title,
-            "description": " ".join(current_description)
-        })
-    
-    # Ensure we have exactly 3 ideas
-    while len(ideas) < 3:
-        ideas.append({
-            "title": f"Viral Tech Idea #{len(ideas) + 1}",
-            "description": "A creative video concept showcasing your technology's unique value proposition."
-        })
-    
-    return ideas[:3]
-
-def _parse_script_from_response(text: str) -> Dict[str, str]:
-    """
-    Parse the raw response from DeepSeek into a structured script.
-    
-    Args:
-        text: The raw text response
-        
-    Returns:
-        Dictionary with script content and notes
-    """
-    script = {
+def _process_script_sections(text: str) -> Dict[str, str]:
+    """Process raw script text into sections"""
+    sections = {
         "content": "",
         "delivery_notes": "",
         "editing_notes": ""
     }
     
     current_section = "content"
-    sections = []
+    lines = text.split("\n")
     
-    # First, try to split by clear section headers
-    if "SCRIPT:" in text or "Script:" in text:
-        for part in text.split("\n\n"):
-            part = part.strip()
-            if not part:
-                continue
-                
-            if part.upper().startswith("SCRIPT:") or part.capitalize().startswith("Script:"):
-                sections.append(("content", part.split(":", 1)[1].strip()))
-            elif part.upper().startswith("DELIVERY") or part.capitalize().startswith("Delivery"):
-                sections.append(("delivery_notes", part.split(":", 1)[1].strip()))
-            elif part.upper().startswith("EDITING") or part.capitalize().startswith("Editing"):
-                sections.append(("editing_notes", part.split(":", 1)[1].strip()))
-            else:
-                # If no clear header but we have sections already, add to the last section
-                if sections:
-                    last_section = sections[-1][0]
-                    sections.append((last_section, part))
-                else:
-                    sections.append(("content", part))
-    else:
-        # If no clear section headers, try a more heuristic approach
-        parts = text.split("\n\n")
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
         
-        # Longest part is probably the script content
-        longest_part = max(parts, key=len)
-        sections.append(("content", longest_part))
+        lower_line = line.lower()
+        if "delivery note" in lower_line:
+            current_section = "delivery_notes"
+            continue
+        elif "editing note" in lower_line:
+            current_section = "editing_notes"
+            continue
         
-        # Look for delivery and editing notes in other parts
-        for part in parts:
-            if part == longest_part:
-                continue
-                
-            if "delivery" in part.lower() or "tone" in part.lower() or "energy" in part.lower():
-                sections.append(("delivery_notes", part))
-            elif "editing" in part.lower() or "visual" in part.lower() or "b-roll" in part.lower():
-                sections.append(("editing_notes", part))
+        sections[current_section] = sections[current_section] + "\n" + line if sections[current_section] else line
     
-    # Combine all parts of each section
-    for section_type, content in sections:
-        if script[section_type]:
-            script[section_type] += "\n\n" + content
-        else:
-            script[section_type] = content
-    
-    # If we still don't have all sections, provide defaults
-    if not script["delivery_notes"]:
-        script["delivery_notes"] = "Speak with confidence and energy. Maintain eye contact with the camera and use hand gestures to emphasize key points."
-        
-    if not script["editing_notes"]:
-        script["editing_notes"] = "Use fast cuts between points. Add relevant b-roll to illustrate concepts. Include text overlays for key statistics or points."
-    
-    return script
+    return sections
 
-def _get_mock_video_ideas(influencer: str) -> List[Dict[str, str]]:
-    """
-    Generate mock video ideas for demonstration purposes.
-    
-    Args:
-        influencer: The matched influencer name
-        
-    Returns:
-        List of dictionaries with mock video ideas
-    """
-    influencer_info = get_influencer_info(influencer)
-    style = influencer_info["style"]
-    
-    if "challenge" in style.lower() or "MrBeast" == influencer:
-        return [
-            {
-                "title": "I Challenged My Team to 10X Our Conversion Rate",
-                "description": "A challenge-based video showing the extreme tactics used to dramatically improve conversion rates, with a surprising twist at the end."
-            },
-            {
-                "title": "We Built a Game-Changing Feature in Just 24 Hours",
-                "description": "A time-pressured challenge to create something innovative and record-breaking with your team."
-            },
-            {
-                "title": "Giving Away Our Product to Anyone Who Can Beat Me",
-                "description": "A competition-style video where you challenge users to complete tasks with your product for a reward."
-            }
-        ]
-    elif "analytical" in style.lower() or "Marques" in influencer or "Kallaway" == influencer:
-        return [
-            {
-                "title": "The Hidden Feature That Changes Everything",
-                "description": "An in-depth analysis of a overlooked feature that provides exceptional value to users."
-            },
-            {
-                "title": "Why This Tech Solution Outperforms Everything Else",
-                "description": "A data-driven comparison showing how your technology achieves superior results compared to alternatives."
-            },
-            {
-                "title": "The Future of [Industry] is Already Here",
-                "description": "A forward-looking analysis of how your technology is advancing the industry in unexpected ways."
-            }
-        ]
-    else:
-        return [
-            {
-                "title": "How We Solved Our Biggest Customer Problem",
-                "description": "A storytelling journey about identifying a critical pain point and developing an innovative solution."
-            },
-            {
-                "title": "The Secret Feature Our Competitors Don't Want You To Know",
-                "description": "A reveal-style video highlighting a unique advantage that sets your product apart."
-            },
-            {
-                "title": "Why Most [Industry] Tools Fail (And How We're Different)",
-                "description": "A contrarian perspective on industry problems and how your approach solves them."
-            }
-        ]
+def _get_mock_video_ideas(industry: str) -> List[str]:
+    """Generate mock video ideas"""
+    return [
+        f'"The {industry} Challenge" - A high-stakes competition where companies compete to solve a real-world problem in 24 hours',
+        f'"Secret Sauce Revealed" - Behind-the-scenes look at how successful {industry} companies operate',
+        f'"Tech Transformation" - Dramatic before-and-after reveal of a company\'s digital transformation'
+    ]
 
-def _get_mock_script(idea: Dict[str, str], influencer: str) -> Dict[str, str]:
-    """
-    Generate a mock script for demonstration purposes.
-    
-    Args:
-        idea: Dictionary with video idea
-        influencer: The matched influencer name
-        
-    Returns:
-        Dictionary with mock script content and notes
-    """
-    title = idea["title"]
-    
-    if "MrBeast" == influencer:
-        return {
-            "content": f"What's up guys! Today we're doing something INSANE! {title}! That's right - we're pushing the limits and seeing just how far we can go. I've challenged my entire team to work non-stop on this, and we're putting $10,000 on the line to make it happen! You won't BELIEVE the results we got. We literally changed the game overnight! Watch till the end to see the SHOCKING outcome that even I didn't expect!",
-            "delivery_notes": "Ultra high energy throughout. Wide eyes, big gestures. Emphasize key words with volume changes. Speak faster than normal conversation. Use shocked expressions when mentioning results.",
-            "editing_notes": "Fast cuts, no clip longer than 3 seconds. Use dramatic zoom effects on key points. Add impact sound effects. Include countdown timer on screen. Show team reactions. Use bright, colorful text overlays for statistics and key numbers."
-        }
-    elif "Marques" in influencer:
-        return {
-            "content": f"So, {title}. I've been testing this for about two weeks now, and there are some interesting things to unpack here. What makes this particularly noteworthy is the attention to detail in solving a real problem that users face every day. The technology uses a unique approach that actually improves efficiency by 30% according to my tests. That's significantly better than anything else I've seen in this space. Let's break down why this works and what it means for the industry going forward.",
-            "delivery_notes": "Calm, measured pace. Maintain professional but conversational tone. Use subtle hand gestures to emphasize key points. Take slight pauses before revealing important data or conclusions.",
-            "editing_notes": "Clean, minimalist visual style. Use split-screen comparisons for before/after. Include close-up b-roll of the product in use. Add simple animated graphics for statistics. Maintain consistent color grading with slightly increased contrast."
-        }
-    else:
-        return {
-            "content": f"Listen up. {title} - and I'm not exaggerating when I say this could completely transform your results. Here's the reality most people miss: the standard approach in this industry is fundamentally flawed. We discovered this when working with clients who were struggling despite doing everything 'right.' The solution wasn't adding more complexity - it was stripping everything back to focus on the core value delivery. This approach generated a 43% improvement in outcomes across all our test cases. I'm going to show you exactly how this works and why it matters.",
-            "delivery_notes": "Direct, confident delivery. Maintain strong eye contact with camera. Speak with authority and conviction. Use deliberate pacing with strategic pauses after important points. Gesture purposefully to emphasize key concepts.",
-            "editing_notes": "Simple, distraction-free background. Use text overlays for key statistics and frameworks. Include brief customer testimonial clips. Add subtle zoom effects during important revelations. Include a clear call-to-action at the end."
-        }
+def _get_mock_script(video_idea: str) -> Dict[str, str]:
+    """Generate a mock script"""
+    return {
+        "content": f"Hey guys! Today we're doing something INSANE with {video_idea}! [Dramatic pause] We're going to show you exactly how this works, and trust me, you won't believe the results!",
+        "delivery_notes": "High energy throughout. Use dramatic pauses for emphasis. Maintain eye contact with camera.",
+        "editing_notes": "Fast cuts between scenes. Add suspenseful music. Use zoom effects for emphasis. Include b-roll of product demos."
+    }
 
 def generate_script_prompt(influencer: str, topic: str) -> str:
     """

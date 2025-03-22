@@ -1,6 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
+import LoadingSpinner from '../components/LoadingSpinner';
+import Layout from '../components/Layout';
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8002';
 
 export default function Quiz() {
   const router = useRouter();
@@ -11,6 +15,42 @@ export default function Quiz() {
   const [isLoading, setIsLoading] = useState(true);
   const [userInfo, setUserInfo] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+  const [loadingStatus, setLoadingStatus] = useState('Initializing...');
+  const [retryCount, setRetryCount] = useState(0);
+
+  const fetchQuestions = async () => {
+    try {
+      setLoadingStatus('Connecting to server...');
+      const response = await fetch(`${API_URL}/api/quiz-questions`);
+      
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.status}`);
+      }
+      
+      setLoadingStatus('Processing questions...');
+      const data = await response.json();
+      
+      if (!data.questions || !Array.isArray(data.questions) || data.questions.length === 0) {
+        throw new Error('Invalid question format received');
+      }
+      
+      setQuestions(data.questions);
+      setIsLoading(false);
+      setError(null);
+    } catch (error) {
+      console.error('Error fetching questions:', error);
+      setError(error.message || 'Failed to load questions. Please try again.');
+      setIsLoading(false);
+    }
+  };
+
+  const handleRetry = () => {
+    setIsLoading(true);
+    setError(null);
+    setRetryCount(prev => prev + 1);
+    fetchQuestions();
+  };
 
   useEffect(() => {
     // Get user info from local storage
@@ -20,139 +60,19 @@ export default function Quiz() {
       return;
     }
     
-    setUserInfo(JSON.parse(storedUserInfo));
-    
-    // Fetch quiz questions
-    const fetchQuestions = async () => {
-      try {
-        // In a real app, this would be fetched from the API
-        // const response = await fetch('http://localhost:8000/api/quiz-questions');
-        // const data = await response.json();
-        // setQuestions(data.questions);
-        
-        // Using mock data for now
-        setQuestions([
-          {
-            id: 1,
-            text: "What's your industry?",
-            options: [
-              { value: "A", text: "Tech" },
-              { value: "B", text: "SaaS" },
-              { value: "C", text: "E-commerce" },
-              { value: "D", text: "Finance" },
-              { value: "E", text: "Healthcare" },
-              { value: "F", text: "Education" },
-              { value: "G", text: "Other" }
-            ]
-          },
-          {
-            id: 2,
-            text: "How would you describe your communication style?",
-            options: [
-              { value: "A", text: "Direct and bold" },
-              { value: "B", text: "Analytical and methodical" },
-              { value: "C", text: "Storytelling and relatable" },
-              { value: "D", text: "Humorous and entertaining" },
-              { value: "E", text: "Casual and conversational" }
-            ]
-          },
-          {
-            id: 3,
-            text: "What's your approach to content creation?",
-            options: [
-              { value: "A", text: "High-energy and attention-grabbing" },
-              { value: "B", text: "Educational and informative" },
-              { value: "C", text: "Thought-provoking and insightful" },
-              { value: "D", text: "Authentic and personal" },
-              { value: "E", text: "Quick and to-the-point" }
-            ]
-          },
-          {
-            id: 4,
-            text: "What do you value most in content?",
-            options: [
-              { value: "A", text: "Entertainment value" },
-              { value: "B", text: "Practical usefulness" },
-              { value: "C", text: "Emotional connection" },
-              { value: "D", text: "Unique perspective" },
-              { value: "E", text: "Clear communication" }
-            ]
-          },
-          {
-            id: 5,
-            text: "How would you handle talking about technical details?",
-            options: [
-              { value: "A", text: "Simplify with analogies and examples" },
-              { value: "B", text: "Deep dive into the specifics" },
-              { value: "C", text: "Focus on benefits and outcomes" },
-              { value: "D", text: "Use humor to make it digestible" },
-              { value: "E", text: "Compare with familiar concepts" }
-            ]
-          },
-          {
-            id: 6,
-            text: "What would your video thumbnail style be?",
-            options: [
-              { value: "A", text: "Shocked expression with bold text" },
-              { value: "B", text: "Clean product shot with minimal text" },
-              { value: "C", text: "You in action with a clear value prop" },
-              { value: "D", text: "Humorous scene or meme format" },
-              { value: "E", text: "Before/after demonstration" }
-            ]
-          },
-          {
-            id: 7,
-            text: "What's your preferred video pacing?",
-            options: [
-              { value: "A", text: "Fast-paced with lots of cuts" },
-              { value: "B", text: "Methodical and measured" },
-              { value: "C", text: "Dynamic with storytelling arcs" },
-              { value: "D", text: "Unpredictable with pattern interrupts" },
-              { value: "E", text: "Conversational with natural flow" }
-            ]
-          },
-          {
-            id: 8,
-            text: "How would you handle criticism or competition?",
-            options: [
-              { value: "A", text: "Turn it into a challenge or contest" },
-              { value: "B", text: "Analyze it objectively with data" },
-              { value: "C", text: "Share the journey and lessons learned" },
-              { value: "D", text: "Use humor and self-awareness" },
-              { value: "E", text: "Focus on differentiation and unique value" }
-            ]
-          },
-          {
-            id: 9,
-            text: "What would your call-to-action style be?",
-            options: [
-              { value: "A", text: "High-energy challenge or dare" },
-              { value: "B", text: "Data-backed recommendation" },
-              { value: "C", text: "Authentic invitation to connect" },
-              { value: "D", text: "Unexpected or humorous twist" },
-              { value: "E", text: "Clear and direct value proposition" }
-            ]
-          },
-          {
-            id: 10,
-            text: "You just went viral! What's your first thought?",
-            options: [
-              { value: "A", text: "How can I double down on this success?" },
-              { value: "B", text: "What metrics can I analyze to understand why?" },
-              { value: "C", text: "My authentic story really resonated!" },
-              { value: "D", text: "The humor and hook really worked!" },
-              { value: "E", text: "Time to make another similar video!" }
-            ]
-          }
-        ]);
-        setIsLoading(false);
-      } catch (error) {
-        console.error('Error fetching questions:', error);
-        setIsLoading(false);
+    try {
+      const parsedUserInfo = JSON.parse(storedUserInfo);
+      if (!parsedUserInfo.name || !parsedUserInfo.companyName || !parsedUserInfo.websiteUrl) {
+        throw new Error('Missing required user information');
       }
-    };
-
-    fetchQuestions();
+      setUserInfo(parsedUserInfo);
+      setLoadingStatus('Loading questions...');
+      fetchQuestions();
+    } catch (e) {
+      setError('Invalid user data. Please try again.');
+      router.push('/');
+      return;
+    }
   }, [router]);
 
   const handleOptionSelect = (option) => {
@@ -203,75 +123,82 @@ export default function Quiz() {
         answers: quizAnswers
       };
       
-      // Store the answers in localStorage (in a real app, this would be sent to the API)
-      localStorage.setItem('quizAnswers', JSON.stringify(payload));
+      // Send the answers to the API
+      const response = await fetch(`${API_URL}/api/submit-quiz`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to submit quiz');
+      }
+
+      const results = await response.json();
       
-      // In a real app, this would be sent to the API
-      // const response = await fetch('http://localhost:8000/api/submit-quiz', {
-      //   method: 'POST',
-      //   headers: {
-      //     'Content-Type': 'application/json',
-      //   },
-      //   body: JSON.stringify(payload),
-      // });
-      
-      // For now, create some mock results
-      const mockResults = {
-        influencer: "MrBeast",
-        influencer_style: "High-energy, bold, challenge-driven",
-        company_summary: [
-          `${userInfo.companyName} recently launched a new AI-powered feature that increases productivity by 30%`,
-          `The company focuses on solving pain points in the enterprise software market with innovative technology`,
-          `A recent case study showed how ${userInfo.companyName} helped a client reduce costs by 25% while improving results`
-        ],
-        ideas: [
-          {
-            title: "I Challenged My Team to 10X Our Conversion Rate",
-            description: "A challenge-based video showing the extreme tactics used to dramatically improve conversion rates, with a surprising twist at the end."
-          },
-          {
-            title: "We Built a Game-Changing Feature in Just 24 Hours",
-            description: "A time-pressured challenge to create something innovative and record-breaking with your team."
-          },
-          {
-            title: "Giving Away Our Product to Anyone Who Can Beat Me",
-            description: "A competition-style video where you challenge users to complete tasks with your product for a reward."
-          }
-        ],
-        scripts: [
-          {
-            content: `What's up guys! Today we're doing something INSANE! I Challenged My Team to 10X Our Conversion Rate! That's right - we're pushing the limits and seeing just how far we can go. I've challenged my entire team to work non-stop on this, and we're putting $10,000 on the line to make it happen! You won't BELIEVE the results we got. We literally changed the game overnight!`,
-            delivery_notes: "Ultra high energy throughout. Wide eyes, big gestures. Emphasize key words with volume changes. Speak faster than normal conversation.",
-            editing_notes: "Fast cuts, no clip longer than 3 seconds. Use dramatic zoom effects on key points. Add impact sound effects. Include countdown timer on screen."
-          },
-          {
-            content: `What's up guys! Today we're doing something CRAZY! We Built a Game-Changing Feature in Just 24 Hours! I gave my team exactly 24 hours to create something that would completely revolutionize our product. If they succeeded, I'd give them $5,000 each! If they failed... well, let's just say failure wasn't an option! You have to see what they came up with - it's MIND-BLOWING!`,
-            delivery_notes: "Start with extremely high energy and maintain it throughout. Use dramatic pauses before revealing results. Wide-eyed reactions to progress updates.",
-            editing_notes: "Use a prominent countdown timer. Quick cuts between team members working. Dramatic music building up to the reveal. Slow motion for the final unveiling."
-          },
-          {
-            content: `Hey everyone! Today I'm doing something I've NEVER done before. I'm Giving Away Our Product to Anyone Who Can Beat Me! That's right - if you can complete these IMPOSSIBLE challenges faster than me, you'll get our premium plan absolutely FREE for LIFE! I've set up three insane challenges that push our product to its limits. First person to beat all three wins! This is going to be EPIC!`,
-            delivery_notes: "Extremely high energy and enthusiasm. Act genuinely excited about the challenge. Use big gestures and animated expressions throughout.",
-            editing_notes: "Fast-paced editing with quick transitions. Use on-screen graphics for challenge rules and timers. Add sound effects for wins/losses. Include reaction shots from participants."
-          }
-        ]
-      };
-      
-      // Store the results in localStorage
-      localStorage.setItem('quizResults', JSON.stringify(mockResults));
-      
-      // Navigate to results page
+      // Store results and redirect to results page
+      localStorage.setItem('quizResults', JSON.stringify(results));
       router.push('/results');
+      
     } catch (error) {
       console.error('Error submitting quiz:', error);
+      setError(error.message);
+    } finally {
       setSubmitting(false);
     }
   };
   
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-white flex justify-center items-center">
-        <div className="text-[#2C3E50] text-xl">Loading quiz...</div>
+      <div className="min-h-screen bg-white flex flex-col justify-center items-center">
+        <LoadingSpinner />
+        <div className="text-[#2C3E50] text-xl mt-4 mb-4">{loadingStatus}</div>
+        {error && retryCount < 3 && (
+          <div className="text-red-500 text-center max-w-md px-4">
+            <p className="mb-4">{error}</p>
+            <button
+              onClick={handleRetry}
+              className="bg-[#2C3E50] text-white px-6 py-2 rounded-lg hover:bg-[#1a2530] mr-4"
+            >
+              Try Again
+            </button>
+            <button
+              onClick={() => router.push('/')}
+              className="bg-gray-500 text-white px-6 py-2 rounded-lg hover:bg-gray-600"
+            >
+              Return to Home
+            </button>
+          </div>
+        )}
+        {error && retryCount >= 3 && (
+          <div className="text-red-500 text-center max-w-md px-4">
+            <p className="mb-4">Unable to load the quiz. Please try again later.</p>
+            <button
+              onClick={() => router.push('/')}
+              className="bg-[#2C3E50] text-white px-6 py-2 rounded-lg hover:bg-[#1a2530]"
+            >
+              Return to Home
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-white flex flex-col justify-center items-center">
+        <div className="text-red-500 text-center max-w-md px-4">
+          <p className="text-xl mb-4">{error}</p>
+          <button
+            onClick={() => router.push('/')}
+            className="bg-[#2C3E50] text-white px-6 py-2 rounded-lg hover:bg-[#1a2530]"
+          >
+            Return to Home
+          </button>
+        </div>
       </div>
     );
   }

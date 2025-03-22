@@ -1,4 +1,8 @@
 from typing import Dict, List, Tuple, Any
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 # Influencer data
 INFLUENCERS = {
@@ -22,10 +26,6 @@ INFLUENCERS = {
         "style": "Relatable, storytelling-focused",
         "description": "Connects with audience through personal stories and deep conversations."
     },
-    "Mino": {
-        "style": "Chaotic, bro-y, relatable",
-        "description": "Energetic, sometimes chaotic delivery with relatable personality."
-    },
     "Dan Toomey": {
         "style": "Sarcastic, humorous, corporate-focused",
         "description": "Uses humor and sarcasm to comment on corporate culture and business."
@@ -33,142 +33,87 @@ INFLUENCERS = {
     "Corporate Natalie": {
         "style": "Sarcastic, self-aware, corporate satire",
         "description": "Satirical take on corporate life with a female perspective."
-    },
-    "Corporate Bro": {
-        "style": "Humorous, bro-y, corporate satire",
-        "description": "Comedy skits about sales, business, and corporate dynamics with a male perspective."
-    },
-    "Kallaway": {
-        "style": "Analytical, tech-savvy, visionary",
-        "description": "Forward-thinking analysis of technology trends and business innovation."
     }
 }
 
-def get_influencer_info(influencer: str) -> Dict[str, str]:
+def get_influencer_info(influencer_name: str) -> Dict[str, Any]:
     """
-    Get influencer style information and characteristics
-    """
-    influencer_styles = {
-        "Hormozi": {
-            "style": "direct, strategic, no-fluff",
-            "tone": "authoritative",
-            "pacing": "medium",
-            "characteristics": [
-                "Value-first delivery",
-                "Direct business insights",
-                "Clear actionable steps"
-            ]
-        },
-        "MrBeast": {
-            "style": "high-energy, challenge-based, dramatic",
-            "tone": "excited",
-            "pacing": "fast",
-            "characteristics": [
-                "Big challenges",
-                "Dramatic reveals",
-                "High stakes content"
-            ]
-        },
-        "GaryVee": {
-            "style": "motivational, raw, unfiltered",
-            "tone": "passionate",
-            "pacing": "fast",
-            "characteristics": [
-                "Motivational messages",
-                "Raw authenticity",
-                "Direct audience engagement"
-            ]
-        },
-        "Casey": {
-            "style": "narrative-driven, visual, personal",
-            "tone": "storytelling",
-            "pacing": "dynamic",
-            "characteristics": [
-                "Strong visual storytelling",
-                "Personal experiences",
-                "Journey-based content"
-            ]
-        },
-        "Emma": {
-            "style": "casual, authentic, relatable",
-            "tone": "conversational",
-            "pacing": "natural",
-            "characteristics": [
-                "Genuine reactions",
-                "Casual vlogging",
-                "Relatable experiences"
-            ]
-        },
-        "Lilly": {
-            "style": "comedic, energetic, entertaining",
-            "tone": "upbeat",
-            "pacing": "quick",
-            "characteristics": [
-                "Comedy sketches",
-                "Character-based content",
-                "Entertaining education"
-            ]
-        }
-    }
-    
-    return influencer_styles.get(influencer, {
-        "style": "professional, balanced",
-        "tone": "neutral",
-        "pacing": "moderate",
-        "characteristics": ["Standard presentation"]
-    })
-
-def match_influencer(quiz_answers: List[Dict[str, str]]) -> Tuple[str, Dict[str, Any]]:
-    """
-    Match user with an influencer based on quiz answers
-    """
-    scores = {
-        "Hormozi": 0,
-        "MrBeast": 0,
-        "GaryVee": 0,
-        "Casey": 0,
-        "Emma": 0,
-        "Lilly": 0
-    }
-    
-    # Example scoring based on quiz answers
-    for answer in quiz_answers:
-        question_id = answer["question_id"]
-        response = answer["answer"]
-        
-        if question_id == 1:  # Content Style Preference
-            if response == "A":  # Direct and educational
-                scores["Hormozi"] += 2
-            elif response == "B":  # Big and dramatic
-                scores["MrBeast"] += 2
-            elif response == "C":  # Raw and motivational
-                scores["GaryVee"] += 2
-                
-        elif question_id == 2:  # Presentation Style
-            if response == "A":  # Professional and structured
-                scores["Hormozi"] += 2
-            elif response == "B":  # Casual and relatable
-                scores["Emma"] += 2
-            elif response == "C":  # Entertaining and funny
-                scores["Lilly"] += 2
-                
-        # ... more scoring logic for other questions ...
-    
-    # Find the best match
-    matched_influencer = max(scores.items(), key=lambda x: x[1])[0]
-    return matched_influencer, get_influencer_info(matched_influencer)
-
-def get_influencer_info(influencer_name: str) -> Dict:
-    """
-    Get the detailed information about an influencer.
-    
-    Args:
-        influencer_name: Name of the influencer
-        
-    Returns:
-        Dictionary with influencer information
+    Get information about an influencer
+    Returns dict with style and description
     """
     return INFLUENCERS.get(influencer_name, {
-        "style": "Unknown",
-        "description": "Influencer not found"
-    }) 
+        "style": "Professional and engaging",
+        "description": "Default style for unknown influencer"
+    })
+
+def match_influencer(quiz_answers: List[Any]) -> Tuple[str, Dict[str, Any]]:
+    """
+    Match user with an influencer based on quiz answers
+    Returns tuple of (influencer_name, influencer_info)
+    """
+    try:
+        # Default to MrBeast if something goes wrong
+        default_influencer = "MrBeast"
+        default_info = INFLUENCERS[default_influencer]
+        
+        # Initialize scores for all influencers
+        scores = {name: 0 for name in INFLUENCERS.keys()}
+        
+        # Score based on answers
+        for answer in quiz_answers:
+            question_id = answer.question_id  # Access as attribute instead of dict key
+            choice = answer.answer  # Access as attribute instead of dict key
+            
+            # Scoring logic based on questions
+            if question_id == 2:  # Communication style
+                if choice == "A":  # Direct and bold
+                    scores["Gary Vee"] += 2
+                    scores["Alex Hormozi"] += 2
+                elif choice == "B":  # Analytical and methodical
+                    scores["Marques Brownlee"] += 2
+                elif choice == "C":  # Storytelling and relatable
+                    scores["MrBeast"] += 2
+                    scores["Steven Bartlett"] += 2
+                elif choice == "D":  # Humorous and entertaining
+                    scores["Dan Toomey"] += 2
+                    scores["Corporate Natalie"] += 2
+            
+            elif question_id == 3:  # Content creation approach
+                if choice == "A":  # High-energy
+                    scores["MrBeast"] += 2
+                elif choice == "B":  # Educational
+                    scores["Marques Brownlee"] += 2
+                    scores["Alex Hormozi"] += 1
+                elif choice == "C":  # Thought-provoking
+                    scores["Gary Vee"] += 2
+                    scores["Steven Bartlett"] += 2
+                elif choice == "D":  # Authentic
+                    scores["Corporate Natalie"] += 2
+                elif choice == "E":  # Quick
+                    scores["Dan Toomey"] += 2
+            
+            elif question_id == 4:  # Content value
+                if choice == "A":  # Entertainment
+                    scores["MrBeast"] += 2
+                    scores["Dan Toomey"] += 1
+                elif choice == "B":  # Practical
+                    scores["Marques Brownlee"] += 2
+                    scores["Alex Hormozi"] += 2
+                elif choice == "C":  # Emotional
+                    scores["Gary Vee"] += 2
+                    scores["Steven Bartlett"] += 2
+                elif choice == "D":  # Unique
+                    scores["Corporate Natalie"] += 2
+                elif choice == "E":  # Clear
+                    scores["Marques Brownlee"] += 1
+                    scores["Alex Hormozi"] += 1
+        
+        # Find influencer with highest score
+        matched_influencer = max(scores.items(), key=lambda x: x[1])[0]
+        matched_info = INFLUENCERS[matched_influencer]
+        
+        return matched_influencer, matched_info
+        
+    except Exception as e:
+        logger.error(f"Error in match_influencer: {str(e)}")
+        return default_influencer, default_info 

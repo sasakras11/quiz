@@ -34,11 +34,35 @@ export default function Home() {
     if (!formData.name.trim()) newErrors.name = 'Name is required';
     if (!formData.companyName.trim()) newErrors.companyName = 'Company name is required';
     
-    // Simple URL validation
+    // More flexible URL validation
     if (!formData.websiteUrl.trim()) {
       newErrors.websiteUrl = 'Website URL is required';
-    } else if (!/^https?:\/\/.+\..+/.test(formData.websiteUrl)) {
-      newErrors.websiteUrl = 'Please enter a valid URL (include http:// or https://)';
+    } else {
+      // Clean up the URL
+      let url = formData.websiteUrl.trim().toLowerCase();
+      
+      // Remove any trailing slashes
+      url = url.replace(/\/+$/, '');
+      
+      // If it's just a domain, add https://
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        url = 'https://' + url;
+      }
+      
+      try {
+        const urlObj = new URL(url);
+        // Make sure there's a valid domain with at least one dot
+        if (!urlObj.hostname.includes('.')) {
+          throw new Error('Invalid domain');
+        }
+        // Update the URL in the form data with the cleaned version
+        setFormData(prev => ({
+          ...prev,
+          websiteUrl: url
+        }));
+      } catch (e) {
+        newErrors.websiteUrl = 'Please enter a valid domain (e.g., company.com)';
+      }
     }
     
     setErrors(newErrors);
